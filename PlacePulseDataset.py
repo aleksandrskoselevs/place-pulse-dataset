@@ -50,15 +50,28 @@ class PlacePulseDataset(Dataset):
     """
     def __init__(self, dataframe=None, qscores_tsv_path='data/qscores.tsv', 
                  transform=None, img_dir='data/images/', 
-                 return_location_id=False, study_id=None, transform_only_image=True,
-                 split=None):
+                 return_location_id=False, study_id=None, study_type=None, 
+                 transform_only_image=True, split=None):
+        
+        if not study_id and not study_type:
+            raise ValueError("Please provide either 'study_id' or 'study_type'.")
+
+        if qscores_tsv_path and isinstance(dataframe, pd.DataFrame):
+            raise ValueError("Please provide either 'qscores_path' or 'dataframe', but not both. These parameters are mutually exclusive.")        
+        
         self.transform = transform
         self.dataset_folder_path = img_dir 
         self.return_location_id = return_location_id
         self.transform_only_image = transform_only_image
-        
-        if qscores_tsv_path and isinstance(dataframe, pd.DataFrame):
-            raise ValueError("Please provide either 'qscores_path' or 'dataframe', but not both. These parameters are mutually exclusive.")
+        self.study_types = {         # Adapted from `studies.tsv`
+            'safe': '50a68a51fdc9f05596000002',
+            'lively': '50f62c41a84ea7c5fdd2e454',
+            'clean': '50f62c68a84ea7c5fdd2e456',
+            'wealthy': '50f62cb7a84ea7c5fdd2e458',
+            'depressing': '50f62ccfa84ea7c5fdd2e459',
+            'beautiful': '5217c351ad93a7d3e7b07a64'
+        }
+
         
         if qscores_tsv_path:
             dataframe = pd.read_csv(qscores_tsv_path, sep='\t')
@@ -69,6 +82,10 @@ class PlacePulseDataset(Dataset):
             self.dataframe['trueskill.score'] = torch.FloatTensor(self.dataframe['trueskill.score'].values)            
         
         if study_id:
+            self.dataframe = self.dataframe[self.dataframe['study_id'] == study_id]
+
+        if study_type:
+            study_id = self.study_types[study_type]
             self.dataframe = self.dataframe[self.dataframe['study_id'] == study_id]
         
         if split:
@@ -131,7 +148,14 @@ class PlacePulseDataset(Dataset):
         location_ids_from_existing_files = [os.path.splitext(file_name)[0] for file_name in file_names]
         q_scores_clean = q_scores[q_scores['location_id'].isin(location_ids_from_existing_files)]
 
-        return q_scores_clean    
+        return q_scores_clean
+
+    @staticmethod
+    def clean_qscores():
+        qscores_tsv_path = 'data/qscores.tsv'
+        qscores_df = pd.read_csv(qscores_tsv_path, sep='\t')
+        qscores_clean = PlacePulseDataset.get_q_score_only_for_files_in_folder(qscores_df, 'data/images/')
+        qscores_clean.to_csv(qscores_tsv_path, sep='\t', index=False)
     
     @staticmethod
     def download_archive():
@@ -140,7 +164,7 @@ class PlacePulseDataset(Dataset):
 
         total_size = int(response.headers.get('content-length', 0))
         block_size = 1024
-        t = tqdm(total=total_size, unit='iB', unit_scale=True)
+        t = tqdm(total=total_size, desc='Downloading archive', unit='iB', unit_scale=True)
 
         with open("place-pulse-2.0.zip", "wb") as f:
             for data in response.iter_content(block_size):
@@ -195,10 +219,13 @@ class PlacePulseDataset(Dataset):
 
             shutil.copyfile(file_path, destination_path)
 
-        print('Removing original images folder')
+        print('Cleaning up.')
         shutil.rmtree(source_dir)
         os.rename(destination_dir, source_dir)
-    
+
+        print('Removing samples where image is missing.')
+        PlacePulseDataset.clean_qscores()
+
     @staticmethod
     def load() -> None:
         """
